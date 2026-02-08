@@ -65,6 +65,7 @@ class ZephyrMacroAllocator(QCAlgorithm):
             "treasury_bonds": ["VGSH", "VGIT", "VGLT"],
             "high_yield_bonds": ["SHYG", "HYG"],
             "equities": ["VTI", "VEA", "VWO"],
+            "equity_income": ["VIG", "VYM", "VIGI", "VYMI"],
             "crypto": ["BTCUSD", "ETHUSD"],
             "cash": ["SHV"]
         }
@@ -236,6 +237,7 @@ class ZephyrMacroAllocator(QCAlgorithm):
             "treasury_bonds": treasury_bonds,
             "high_yield_bonds": high_yield_bonds,
             "equities": self.symbols["equities"],
+            "equity_income": self.symbols["equity_income"],
             "crypto": self.symbols["crypto"]
         }
 

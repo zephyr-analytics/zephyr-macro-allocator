@@ -30,6 +30,7 @@ GROUPS = {
     "treasury_bonds": ["VGSH", "VGIT", "VGLT"],
     "high_yield_bonds": ["SHYG", "HYG"],
     "equities": ["VTI", "VEA", "VWO"],
+    "equity_income": ["VIG", "VYM", "VIGI", "VYMI"],
     "crypto": ["IBIT", "ETHA"],
     "cash": ["SHV"]
 }
@@ -107,6 +108,7 @@ risk_groups = {
     "treasury_bonds": duration_regime(GROUPS["treasury_bonds"]),
     "high_yield_bonds": duration_regime(GROUPS["high_yield_bonds"]),
     "equities": GROUPS["equities"],
+    "equity_income": GROUPS["equity_income"],
     "crypto": GROUPS["crypto"]
 }
 
