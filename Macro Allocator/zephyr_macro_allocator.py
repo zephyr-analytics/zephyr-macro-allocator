@@ -252,6 +252,7 @@ class ZephyrMacroAllocator(QCAlgorithm):
         for group, symbols in risk_groups.items():
             eligible = []
             asset_edges = {}
+            asset_adxs = {}
 
             for s in symbols:
                 if s not in closes.columns:
@@ -265,6 +266,15 @@ class ZephyrMacroAllocator(QCAlgorithm):
                 if asset_6m < bil_6m or asset_momentum <= 0:
                     continue
 
+                s_data = history.loc[s]
+                current_adx = self.compute_manual_adx(
+                            s_data['high'], 
+                            s_data['low'], 
+                            s_data['close']
+                        )
+
+                # 2. Multiply momentum by ADX to get the adjusted edge
+                asset_edge = asset_momentum * current_adx
                 asset_edge = asset_momentum
                 eligible.append(s)
                 asset_edges[s] = asset_edge
@@ -272,37 +282,50 @@ class ZephyrMacroAllocator(QCAlgorithm):
             if not eligible:
                 continue
 
-            group_assets[group] = eligible
-            group_asset_edges[group] = asset_edges
+            # 1. Create a weight series from asset_edges
+            edge_series = pd.Series(asset_edges)
+            asset_weights = edge_series / edge_series.sum()
 
-            group_simple_returns = closes[eligible].pct_change().mean(axis=1).dropna()
-            if len(group_simple_returns) < max(self.winrate_lookback, self.vol_lookback):
+            # 3. Construct the Weighted Return Series
+            # This is the "Weighted Group Performance" day-by-day
+            group_returns_df = closes[eligible].pct_change()
+            weighted_group_returns = (group_returns_df * asset_weights).sum(axis=1).dropna()
+
+            if len(weighted_group_returns) < max(self.winrate_lookback, self.vol_lookback):
                 continue
 
-            log_group = np.log1p(group_simple_returns)
-            win_rate = float(
-                np.mean(log_group.tail(self.winrate_lookback) > 0)
-            )
+            # 4. Group ADX (Weighted Average of Asset ADXs)
+            group_adx = (pd.Series(asset_adxs) * asset_weights).sum()
 
-            group_momentum = self.compute_group_momentum(eligible, closes)
+            # 5. Group Momentum (Weighted Average)
+            group_momentum = (edge_series * asset_weights).sum()
 
-            if not np.isfinite(group_momentum) or group_momentum <=0:
-                continue
+            # 6. CALCULATE WEIGHTED WIN RATE & VOLATILITY
+            # Using the log of the weighted return series
+            log_group = np.log1p(weighted_group_returns)
 
-            group_vol = float(
-                np.std(log_group.tail(self.vol_lookback)) * np.sqrt(252)
-            )
+            # Weighted Win Rate: Frequency of positive days in the weighted basket
+            win_rate = float(np.mean(log_group.tail(self.winrate_lookback) > 0))
+
+            # Weighted Group Vol: Annualized StdDev of the weighted basket
+            group_vol = float(np.std(log_group.tail(self.vol_lookback)) * np.sqrt(252))
 
             if not np.isfinite(group_vol) or group_vol <= 0:
                 continue
+
             vols[group] = group_vol
 
-            confidence = group_momentum / (group_vol + 1e-6)
+            # 7. Final Confidence & Edge Construction
+            # Incorporating the Group ADX as a multiplier for trend quality
+            confidence = (group_momentum * group_adx) / (group_vol + 1e-6)
 
             if self.use_group_momentum:
-                edges[group] = group_momentum
+                edges[group] = group_momentum * group_adx
             else:
                 edges[group] = win_rate * (1.0 + confidence)
+
+            group_assets[group] = eligible
+            group_asset_edges[group] = asset_edges
 
         if not edges:
             self.SetHoldings(cash_symbol, 1.0)
@@ -464,7 +487,7 @@ class ZephyrMacroAllocator(QCAlgorithm):
 
             if np.isfinite(mom):
                 values.append(mom)
-                
+
         return float(np.mean(values)) if values else 0.0
 
     def compute_asset_momentum(self, symbol: Symbol, closes: pd.DataFrame) -> float:
@@ -496,3 +519,38 @@ class ZephyrMacroAllocator(QCAlgorithm):
             prices.iloc[-1] / prices.iloc[-(lb + 1)] - 1
             for lb in self.momentum_lookbacks
         ]))
+
+
+    def compute_manual_adx(self, high, low, close, period=14):
+        # 1. Calculate +DM and -DM (Directional Movement)
+        up_move = high.diff()
+        down_move = -low.diff()
+
+        # Apply your logic: If move is positive and greater than the other, keep it
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+
+        # 2. True Range (TR) - Required to normalize the DI values
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+        # 3. Calculate the Averages (Using Wilder's Smoothing / EMA)
+        # We smooth TR, +DM, and -DM over the period
+        alpha = 1 / period
+        smooth_plus_dm = pd.Series(plus_dm).ewm(alpha=alpha, adjust=False).mean()
+        smooth_minus_dm = pd.Series(minus_dm).ewm(alpha=alpha, adjust=False).mean()
+        smooth_tr = tr.ewm(alpha=alpha, adjust=False).mean()
+
+        # 4. Calculate DI+ and DI-
+        plus_di = 100 * (smooth_plus_dm / smooth_tr)
+        minus_di = 100 * (smooth_minus_dm / smooth_tr)
+
+        # 5. Calculate DX (Your step: |DI+ - DI-| / |DI+ + DI-| * 100)
+        dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di))
+
+        # 6. Final ADX (The average of DX over time)
+        adx = dx.ewm(alpha=alpha, adjust=False).mean()
+
+        return adx.iloc[-1] # Return the most recent value
